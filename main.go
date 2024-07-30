@@ -1,33 +1,33 @@
-
 package main
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/eiannone/keyboard"
 )
 
 type Editor struct {
-	filename string
-	lines []string
+	filename    string
+	lines       []string
 	currentLine int
-	changed bool
+	cursorX     int
+	changed     bool
 }
 
 func NewEditor(filename string) *Editor {
 	content, err := os.ReadFile(filename)
 	if err != nil {
 		fmt.Println("Creating new file:", filename)
-		return &Editor{filename: filename, lines: []string{""}, currentLine: 0}
+		return &Editor{filename: filename, lines: []string{""}, currentLine: 0, cursorX: 0}
 	}
 
 	lines := strings.Split(string(content), "\n")
-	return &Editor{filename: filename, lines: lines, currentLine: 0}
+	return &Editor{filename: filename, lines: lines, currentLine: 0, cursorX: 0}
 }
 
-//method on struct method vanaya special type of functions
-func (e * Editor) display() {
+func (e *Editor) display() {
 	fmt.Print("\033[2J")  // Clear screen
 	fmt.Print("\033[H")   // Move cursor to top-left corner
 	for i, line := range e.lines {
@@ -37,14 +37,58 @@ func (e * Editor) display() {
 			fmt.Printf("  %d: %s\n", i+1, line)
 		}
 	}
-	fmt.Println("\nCommands: :w (save), :q (quit), :wq (save and quit)")
-	fmt.Println("          :u (move up), :d (move down)")
+	fmt.Println("\nCommands: Ctrl+S (save), Ctrl+Q (quit)")
+	fmt.Println("          Arrow keys to move, Enter to insert new line")
+	fmt.Printf("\033[%d;%dH", e.currentLine+1, e.cursorX+5) // Move cursor to current position
 }
 
-func (e * Editor) handelCommand(cmd string) bool {
-	switch cmd {
-		case ":q":
-			if e.changed {
+func (e *Editor) handleKey(char rune, key keyboard.Key) bool {
+	switch key {
+	case keyboard.KeyArrowUp:
+		if e.currentLine > 0 {
+			e.currentLine--
+			if e.cursorX > len(e.lines[e.currentLine]) {
+				e.cursorX = len(e.lines[e.currentLine])
+			}
+		}
+	case keyboard.KeyArrowDown:
+		if e.currentLine < len(e.lines)-1 {
+			e.currentLine++
+			if e.cursorX > len(e.lines[e.currentLine]) {
+				e.cursorX = len(e.lines[e.currentLine])
+			}
+		}
+	case keyboard.KeyArrowLeft:
+		if e.cursorX > 0 {
+			e.cursorX--
+		}
+	case keyboard.KeyArrowRight:
+		if e.cursorX < len(e.lines[e.currentLine]) {
+			e.cursorX++
+		}
+	case keyboard.KeyEnter:
+		rightPart := e.lines[e.currentLine][e.cursorX:]
+		e.lines[e.currentLine] = e.lines[e.currentLine][:e.cursorX]
+		e.lines = append(e.lines[:e.currentLine+1], append([]string{rightPart}, e.lines[e.currentLine+1:]...)...)
+		e.currentLine++
+		e.cursorX = 0
+		e.changed = true
+	case keyboard.KeyBackspace, keyboard.KeyBackspace2:
+		if e.cursorX > 0 {
+			e.lines[e.currentLine] = e.lines[e.currentLine][:e.cursorX-1] + e.lines[e.currentLine][e.cursorX:]
+			e.cursorX--
+			e.changed = true
+		} else if e.currentLine > 0 {
+			e.cursorX = len(e.lines[e.currentLine-1])
+			e.lines[e.currentLine-1] += e.lines[e.currentLine]
+			e.lines = append(e.lines[:e.currentLine], e.lines[e.currentLine+1:]...)
+			e.currentLine--
+			e.changed = true
+		}
+	case keyboard.KeyCtrlS:
+		e.saveFile()
+	case keyboard.KeyCtrlQ:
+		if e.changed {
 			fmt.Print("Unsaved changes. Are you sure you want to quit? (y/n): ")
 			var response string
 			fmt.Scanln(&response)
@@ -52,38 +96,24 @@ func (e * Editor) handelCommand(cmd string) bool {
 				return false
 			}
 		}
-			return true
-	case ":w":
-		e.saveFile()
-	case ":wq":
-		e.saveFile()
 		return true
-	case ":u":
-		if e.currentLine > 0 {
-			e.currentLine--
-		}
-	case ":d":
-		if e.currentLine < len(e.lines) {
-			e.currentLine++
-		}
 	default:
-		e.lines[e.currentLine] = cmd
-		e.changed = true
-		if e.currentLine == len(e.lines)-1 {
-			e.lines = append(e.lines, "")
+		if char != 0 {
+			e.lines[e.currentLine] = e.lines[e.currentLine][:e.cursorX] + string(char) + e.lines[e.currentLine][e.cursorX:]
+			e.cursorX++
+			e.changed = true
 		}
-		e.currentLine++
-}
+	}
 	return false
 }
 
-func (e *Editor) saveFile(){
+func (e *Editor) saveFile() {
 	content := strings.Join(e.lines, "\n")
 	err := os.WriteFile(e.filename, []byte(content), 0644)
 	if err != nil {
 		fmt.Println("Error saving file:", err)
 	} else {
-		fmt.Printf("File saved successfully")
+		fmt.Println("File saved successfully")
 		e.changed = false
 	}
 }
@@ -95,15 +125,21 @@ func main() {
 	}
 
 	editor := NewEditor(os.Args[1])
-	scanner := bufio.NewScanner(os.Stdin)
+
+	if err := keyboard.Open(); err != nil {
+		panic(err)
+	}
+	defer keyboard.Close()
 
 	for {
 		editor.display()
-		fmt.Print("> ")
-		scanner.Scan()
-		input := scanner.Text()
 
-		if editor.handelCommand(input) {
+		char, key, err := keyboard.GetKey()
+		if err != nil {
+			panic(err)
+		}
+
+		if editor.handleKey(char, key) {
 			break
 		}
 	}
